@@ -1,15 +1,14 @@
 import 'dart:convert';
-import 'dart:js_interop';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
-import 'package:web/web.dart' as web;
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 // Sheet columns (0-based): [0]Transaction [1]Date [2]Day [3]UPI [4]CASH
 //                          [5]Reason [6]Credit/Debit [7]LastMonth [8]TotalLeft [9]Month
 const kScriptUrl =
-    'https://script.google.com/macros/s/AKfycbyuEWztRhBMsmsw5Phq-S-HqhQsFfG4JOij6kQPWqgTn-3nM3BLOLb99JNRenNn2T6tdg/exec';
+    'https://script.google.com/macros/s/AKfycbwuq3gK6T5kHsTbtp7BkqMaEtD8737XNPTvZK7zsZJuDyaK198niAXIf1gcB6n2nzXWIA/exec';
 
 // ─── CONTROLLER ───────────────────────────────────────────────────────────────
 class FinanceController extends GetxController {
@@ -29,12 +28,12 @@ class FinanceController extends GetxController {
     isLoading(true);
     errorMsg('');
     try {
-      final res = await web.window.fetch(
-        kScriptUrl.toJS,
-        web.RequestInit(redirect: 'follow'),
-      ).toDart;
-      final text = await res.text().toDart;
-      _processRows(jsonDecode(text.toDart) as List);
+      final res = await http.get(Uri.parse(kScriptUrl));
+      if (res.statusCode == 200) {
+        _processRows(jsonDecode(res.body) as List);
+      } else {
+        errorMsg('Server error: ${res.statusCode}');
+      }
     } catch (_) {
       errorMsg('Failed to load. Check connection.');
     } finally {
@@ -70,16 +69,14 @@ class FinanceController extends GetxController {
   Future<bool> addTransaction(String upi, String reason, double amount) async {
     isPosting(true);
     try {
-      final res = await web.window.fetch(
-        kScriptUrl.toJS,
-        web.RequestInit(
-          method: 'POST',
-          redirect: 'follow',
-          body: jsonEncode({'upi': upi, 'reason': reason, 'amount': amount}).toJS,
-        ),
-      ).toDart;
-      final text = await res.text().toDart;
-      if (text.toDart.contains('Saved')) {
+      final url = Uri.parse(kScriptUrl).replace(queryParameters: {
+        'action': 'add',
+        'upi': upi,
+        'reason': reason,
+        'amount': amount.toString(),
+      });
+      final res = await http.get(url);
+      if (res.statusCode == 200) {
         await fetchData();
         return true;
       }
