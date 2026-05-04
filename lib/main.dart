@@ -1,121 +1,422 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 
-void main() {
-  runApp(const MyApp());
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+// Sheet columns (0-based): [0]Transaction [1]Date [2]Day [3]UPI [4]CASH
+//                          [5]Reason [6]Credit/Debit [7]LastMonth [8]TotalLeft [9]Month
+const kScriptUrl =
+    'https://script.google.com/macros/s/AKfycbyuEWztRhBMsmsw5Phq-S-HqhQsFfG4JOij6kQPWqgTn-3nM3BLOLb99JNRenNn2T6tdg/exec';
+
+// ─── CONTROLLER ───────────────────────────────────────────────────────────────
+class FinanceController extends GetxController {
+  final isLoading = true.obs;
+  final isPosting = false.obs;
+  final totalLeft = 0.0.obs;
+  final monthlyOutflow = 0.0.obs;
+  final errorMsg = ''.obs;
+
+  @override
+  void onInit() {
+    super.onInit();
+    fetchData();
+  }
+
+  Future<void> fetchData() async {
+    isLoading(true);
+    errorMsg('');
+    try {
+      final res = await http.get(Uri.parse(kScriptUrl));
+      if (res.statusCode == 200) {
+        _processRows(jsonDecode(res.body) as List);
+      } else {
+        errorMsg('Server error: ${res.statusCode}');
+      }
+    } catch (_) {
+      errorMsg('Failed to load. Check connection.');
+    } finally {
+      isLoading(false);
+    }
+  }
+
+  // Apps Script doGet returns raw arrays — read by index
+  void _processRows(List rows) {
+    if (rows.isEmpty) return;
+
+    // col I (index 8) of last row = Total left
+    totalLeft(double.tryParse(rows.last[8]?.toString() ?? '0') ?? 0);
+
+    final now = DateTime.now();
+    double outflow = 0;
+    for (final row in rows) {
+      try {
+        // col G (index 6) = "Debit" / "Credit"
+        if (row[6]?.toString() != 'Debit') continue;
+        // col B (index 1) = Date object serialised as ISO string by Apps Script
+        final date = DateTime.parse(row[1].toString());
+        // col D (index 3) = UPI amount
+        final amount = double.tryParse(row[3]?.toString() ?? '0') ?? 0;
+        if (date.year == now.year && date.month == now.month) {
+          outflow += amount;
+        }
+      } catch (_) {}
+    }
+    monthlyOutflow(outflow);
+  }
+
+  Future<bool> addTransaction(String upi, String reason, double amount) async {
+    isPosting(true);
+    try {
+      final res = await http.post(
+        Uri.parse(kScriptUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'upi': upi, 'reason': reason, 'amount': amount}),
+      );
+      if (res.statusCode == 200) {
+        await fetchData();
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    } finally {
+      isPosting(false);
+    }
+  }
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+// ─── MAIN ─────────────────────────────────────────────────────────────────────
+void main() => runApp(const FinanceApp());
 
-  // This widget is the root of your application.
+class FinanceApp extends StatelessWidget {
+  const FinanceApp({super.key});
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
+    return GetMaterialApp(
+      title: 'Finance Dashboard',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF1565C0),
+          brightness: Brightness.dark,
+        ),
+        scaffoldBackgroundColor: const Color(0xFF0D1117),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const DashboardScreen(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
-}
-
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
-  }
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+class DashboardScreen extends StatelessWidget {
+  const DashboardScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    final ctrl = Get.put(FinanceController());
+    final fmt = NumberFormat.currency(locale: 'en_IN', symbol: '₹');
+    final width = MediaQuery.of(context).size.width;
+    // Constrain content width on large screens (tablet/desktop)
+    final contentWidth = width > 600 ? 560.0 : double.infinity;
+
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: const Text('Finance Dashboard'),
+        centerTitle: true,
+        actions: [
+          Obx(() => ctrl.isLoading.value
+              ? const Padding(
+                  padding: EdgeInsets.all(14),
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: ctrl.fetchData,
+                )),
+        ],
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
+      body: Obx(() {
+        if (ctrl.isLoading.value) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (ctrl.errorMsg.isNotEmpty) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.error_outline,
+                      size: 48, color: Colors.redAccent),
+                  const SizedBox(height: 12),
+                  Text(ctrl.errorMsg.value,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.redAccent)),
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    onPressed: ctrl.fetchData,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        return RefreshIndicator(
+          onRefresh: ctrl.fetchData,
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: SizedBox(
+              width: contentWidth,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // On wide screens show cards side by side
+                    width > 480
+                        ? Row(
+                            children: [
+                              Expanded(
+                                child: _BalanceCard(
+                                  label: 'Total Balance',
+                                  value: fmt.format(ctrl.totalLeft.value),
+                                  icon: Icons.account_balance_wallet,
+                                  color: const Color(0xFF1565C0),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: _BalanceCard(
+                                  label: 'Monthly Outflow',
+                                  value: fmt.format(ctrl.monthlyOutflow.value),
+                                  icon: Icons.trending_down,
+                                  color: const Color(0xFFC62828),
+                                ),
+                              ),
+                            ],
+                          )
+                        : Column(
+                            children: [
+                              _BalanceCard(
+                                label: 'Total Balance',
+                                value: fmt.format(ctrl.totalLeft.value),
+                                icon: Icons.account_balance_wallet,
+                                color: const Color(0xFF1565C0),
+                              ),
+                              const SizedBox(height: 12),
+                              _BalanceCard(
+                                label: 'Monthly Outflow',
+                                value: fmt.format(ctrl.monthlyOutflow.value),
+                                icon: Icons.trending_down,
+                                color: const Color(0xFFC62828),
+                              ),
+                            ],
+                          ),
+                    const SizedBox(height: 24),
+                    const _AddTransactionForm(),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+}
+
+// ─── BALANCE CARD ─────────────────────────────────────────────────────────────
+class _BalanceCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+
+  const _BalanceCard({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fontSize = MediaQuery.of(context).size.width < 360 ? 20.0 : 24.0;
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      color: color.withValues(alpha: 0.15),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Row(
           children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.25),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: color, size: 26),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 4),
+                  Text(value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: fontSize,
+                          fontWeight: FontWeight.bold)),
+                ],
+              ),
             ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+    );
+  }
+}
+
+// ─── ADD TRANSACTION FORM ─────────────────────────────────────────────────────
+class _AddTransactionForm extends StatefulWidget {
+  const _AddTransactionForm();
+
+  @override
+  State<_AddTransactionForm> createState() => _AddTransactionFormState();
+}
+
+class _AddTransactionFormState extends State<_AddTransactionForm> {
+  final _formKey = GlobalKey<FormState>();
+  final _upiCtrl = TextEditingController();
+  final _reasonCtrl = TextEditingController();
+  final _amountCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _upiCtrl.dispose();
+    _reasonCtrl.dispose();
+    _amountCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    final ctrl = Get.find<FinanceController>();
+    final success = await ctrl.addTransaction(
+      _upiCtrl.text.trim(),
+      _reasonCtrl.text.trim(),
+      double.parse(_amountCtrl.text.trim()),
+    );
+    if (success) {
+      _upiCtrl.clear();
+      _reasonCtrl.clear();
+      _amountCtrl.clear();
+      Get.snackbar('Success', 'Transaction added!',
+          backgroundColor: Colors.green.shade800,
+          colorText: Colors.white,
+          snackPosition: SnackPosition.BOTTOM);
+    } else {
+      Get.snackbar('Error', 'Failed to add transaction.',
+          backgroundColor: Colors.red.shade800,
+          colorText: Colors.white,
+          snackPosition: SnackPosition.BOTTOM);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ctrl = Get.find<FinanceController>();
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      color: Colors.white.withValues(alpha: 0.05),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('Add Transaction',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white)),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _upiCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'UPI ID',
+                  prefixIcon: Icon(Icons.payment),
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Enter UPI ID' : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _reasonCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Reason',
+                  prefixIcon: Icon(Icons.notes),
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Enter reason' : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _amountCtrl,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Amount (₹)',
+                  prefixIcon: Icon(Icons.currency_rupee),
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return 'Enter amount';
+                  if (double.tryParse(v.trim()) == null) return 'Invalid amount';
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
+              Obx(() => FilledButton.icon(
+                    onPressed: ctrl.isPosting.value ? null : _submit,
+                    icon: ctrl.isPosting.value
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.add),
+                    label: Text(ctrl.isPosting.value
+                        ? 'Submitting...'
+                        : 'Add Transaction'),
+                  )),
+            ],
+          ),
+        ),
       ),
     );
   }

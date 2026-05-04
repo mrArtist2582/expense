@@ -1,11 +1,11 @@
 {
-    "name": "expense",
-    "short_name": "expense",
+    "name": "Finance Dashboard",
+    "short_name": "Finance",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#0D1117",
+    "theme_color": "#1565C0",
+    "description": "Personal Finance Dashboard",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
