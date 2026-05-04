@@ -1,8 +1,9 @@
 import 'dart:convert';
+import 'dart:js_interop';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
+import 'package:web/web.dart' as web;
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 // Sheet columns (0-based): [0]Transaction [1]Date [2]Day [3]UPI [4]CASH
@@ -28,12 +29,12 @@ class FinanceController extends GetxController {
     isLoading(true);
     errorMsg('');
     try {
-      final res = await http.get(Uri.parse(kScriptUrl));
-      if (res.statusCode == 200) {
-        _processRows(jsonDecode(res.body) as List);
-      } else {
-        errorMsg('Server error: ${res.statusCode}');
-      }
+      final res = await web.window.fetch(
+        kScriptUrl.toJS,
+        web.RequestInit(redirect: 'follow'),
+      ).toDart;
+      final text = await res.text().toDart;
+      _processRows(jsonDecode(text.toDart) as List);
     } catch (_) {
       errorMsg('Failed to load. Check connection.');
     } finally {
@@ -69,12 +70,16 @@ class FinanceController extends GetxController {
   Future<bool> addTransaction(String upi, String reason, double amount) async {
     isPosting(true);
     try {
-      final res = await http.post(
-        Uri.parse(kScriptUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'upi': upi, 'reason': reason, 'amount': amount}),
-      );
-      if (res.statusCode == 200) {
+      final res = await web.window.fetch(
+        kScriptUrl.toJS,
+        web.RequestInit(
+          method: 'POST',
+          redirect: 'follow',
+          body: jsonEncode({'upi': upi, 'reason': reason, 'amount': amount}).toJS,
+        ),
+      ).toDart;
+      final text = await res.text().toDart;
+      if (text.toDart.contains('Saved')) {
         await fetchData();
         return true;
       }
