@@ -1,14 +1,49 @@
 import 'dart:convert';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-// Sheet columns (0-based): [0]Transaction [1]Date [2]Day [3]UPI [4]CASH
-//                          [5]Reason [6]Credit/Debit [7]LastMonth [8]TotalLeft [9]Month
 const kScriptUrl =
     'https://script.google.com/macros/s/AKfycbwuq3gK6T5kHsTbtp7BkqMaEtD8737XNPTvZK7zsZJuDyaK198niAXIf1gcB6n2nzXWIA/exec';
+
+// ─── MODEL ────────────────────────────────────────────────────────────────────
+class Transaction {
+  final DateTime date;
+  final String day;
+  final double amount;
+  final String type; // Debit / Credit
+  final String reason;
+  final String mode; // UPI / Cash
+  final double balance;
+
+  Transaction({
+    required this.date,
+    required this.day,
+    required this.amount,
+    required this.type,
+    required this.reason,
+    required this.mode,
+    required this.balance,
+  });
+
+  // col: [0]#  [1]Date  [2]Day  [3]UPI  [4]CASH  [5]Reason  [6]Type  [7]LastMonth  [8]Balance  [9]Month
+  factory Transaction.fromRow(List row) {
+    final upi = double.tryParse(row[3]?.toString() ?? '0') ?? 0;
+    final cash = double.tryParse(row[4]?.toString() ?? '0') ?? 0;
+    return Transaction(
+      date: DateTime.tryParse(row[1].toString()) ?? DateTime.now(),
+      day: row[2]?.toString() ?? '',
+      amount: upi > 0 ? upi : cash,
+      type: row[6]?.toString() ?? 'Debit',
+      reason: row[5]?.toString() ?? '',
+      mode: upi > 0 ? 'UPI' : 'Cash',
+      balance: double.tryParse(row[8]?.toString() ?? '0') ?? 0,
+    );
+  }
+}
 
 // ─── CONTROLLER ───────────────────────────────────────────────────────────────
 class FinanceController extends GetxController {
@@ -17,6 +52,7 @@ class FinanceController extends GetxController {
   final totalLeft = 0.0.obs;
   final monthlyOutflow = 0.0.obs;
   final errorMsg = ''.obs;
+  final transactions = <Transaction>[].obs;
 
   @override
   void onInit() {
@@ -41,39 +77,48 @@ class FinanceController extends GetxController {
     }
   }
 
-  // Apps Script doGet returns raw arrays — read by index
   void _processRows(List rows) {
     if (rows.isEmpty) return;
-
-    // col I (index 8) of last row = Total left
     totalLeft(double.tryParse(rows.last[8]?.toString() ?? '0') ?? 0);
 
+    final list = <Transaction>[];
     final now = DateTime.now();
     double outflow = 0;
     for (final row in rows) {
       try {
-        // col G (index 6) = "Debit" / "Credit"
-        if (row[6]?.toString() != 'Debit') continue;
-        // col B (index 1) = Date object serialised as ISO string by Apps Script
-        final date = DateTime.parse(row[1].toString());
-        // col D (index 3) = UPI amount
-        final amount = double.tryParse(row[3]?.toString() ?? '0') ?? 0;
-        if (date.year == now.year && date.month == now.month) {
-          outflow += amount;
+        final t = Transaction.fromRow(row as List);
+        list.add(t);
+        if (t.type == 'Debit' &&
+            t.date.year == now.year &&
+            t.date.month == now.month) {
+          outflow += t.amount;
         }
       } catch (_) {}
     }
+    transactions.assignAll(list.reversed.toList()); // newest first
     monthlyOutflow(outflow);
   }
 
-  Future<bool> addTransaction(String upi, String reason, double amount) async {
+  // Group transactions by "MMMM yyyy"
+  Map<String, List<Transaction>> get groupedByMonth {
+    final map = <String, List<Transaction>>{};
+    for (final t in transactions) {
+      final key = DateFormat('MMMM yyyy').format(t.date);
+      map.putIfAbsent(key, () => []).add(t);
+    }
+    return map;
+  }
+
+  Future<bool> addTransaction(
+      String mode, String reason, double amount, DateTime date) async {
     isPosting(true);
     try {
       final url = Uri.parse(kScriptUrl).replace(queryParameters: {
         'action': 'add',
-        'upi': upi,
+        'mode': mode,
         'reason': reason,
         'amount': amount.toString(),
+        'date': DateFormat('dd/MM/yyyy').format(date),
       });
       final res = await http.get(url);
       if (res.statusCode == 200) {
@@ -122,7 +167,6 @@ class DashboardScreen extends StatelessWidget {
     final ctrl = Get.put(FinanceController());
     final fmt = NumberFormat.currency(locale: 'en_IN', symbol: '₹');
     final width = MediaQuery.of(context).size.width;
-    // Constrain content width on large screens (tablet/desktop)
     final contentWidth = width > 600 ? 560.0 : double.infinity;
 
     return Scaffold(
@@ -134,10 +178,9 @@ class DashboardScreen extends StatelessWidget {
               ? const Padding(
                   padding: EdgeInsets.all(14),
                   child: SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2)),
                 )
               : IconButton(
                   icon: const Icon(Icons.refresh),
@@ -185,46 +228,55 @@ class DashboardScreen extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // On wide screens show cards side by side
                     width > 480
-                        ? Row(
-                            children: [
-                              Expanded(
-                                child: _BalanceCard(
-                                  label: 'Total Balance',
-                                  value: fmt.format(ctrl.totalLeft.value),
-                                  icon: Icons.account_balance_wallet,
-                                  color: const Color(0xFF1565C0),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: _BalanceCard(
-                                  label: 'Monthly Outflow',
-                                  value: fmt.format(ctrl.monthlyOutflow.value),
-                                  icon: Icons.trending_down,
-                                  color: const Color(0xFFC62828),
-                                ),
-                              ),
-                            ],
-                          )
-                        : Column(
-                            children: [
-                              _BalanceCard(
+                        ? Row(children: [
+                            Expanded(
+                              child: _BalanceCard(
                                 label: 'Total Balance',
                                 value: fmt.format(ctrl.totalLeft.value),
                                 icon: Icons.account_balance_wallet,
                                 color: const Color(0xFF1565C0),
                               ),
-                              const SizedBox(height: 12),
-                              _BalanceCard(
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: _BalanceCard(
                                 label: 'Monthly Outflow',
                                 value: fmt.format(ctrl.monthlyOutflow.value),
                                 icon: Icons.trending_down,
                                 color: const Color(0xFFC62828),
                               ),
-                            ],
-                          ),
+                            ),
+                          ])
+                        : Column(children: [
+                            _BalanceCard(
+                              label: 'Total Balance',
+                              value: fmt.format(ctrl.totalLeft.value),
+                              icon: Icons.account_balance_wallet,
+                              color: const Color(0xFF1565C0),
+                            ),
+                            const SizedBox(height: 12),
+                            _BalanceCard(
+                              label: 'Monthly Outflow',
+                              value: fmt.format(ctrl.monthlyOutflow.value),
+                              icon: Icons.trending_down,
+                              color: const Color(0xFFC62828),
+                            ),
+                          ]),
+                    const SizedBox(height: 16),
+                    // Statement button — full width, always visible
+                    OutlinedButton.icon(
+                      onPressed: () => Get.to(() => const StatementScreen()),
+                      icon: const Icon(Icons.receipt_long),
+                      label: const Text('View Statement'),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        side: const BorderSide(color: Color(0xFF1565C0)),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
                     const SizedBox(height: 24),
                     const _AddTransactionForm(),
                   ],
@@ -309,30 +361,41 @@ class _AddTransactionForm extends StatefulWidget {
 
 class _AddTransactionFormState extends State<_AddTransactionForm> {
   final _formKey = GlobalKey<FormState>();
-  final _upiCtrl = TextEditingController();
   final _reasonCtrl = TextEditingController();
   final _amountCtrl = TextEditingController();
+  String _paymentMode = 'UPI';
+  DateTime _selectedDate = DateTime.now();
 
   @override
   void dispose() {
-    _upiCtrl.dispose();
     _reasonCtrl.dispose();
     _amountCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null) setState(() => _selectedDate = picked);
   }
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     final ctrl = Get.find<FinanceController>();
     final success = await ctrl.addTransaction(
-      _upiCtrl.text.trim(),
+      _paymentMode,
       _reasonCtrl.text.trim(),
       double.parse(_amountCtrl.text.trim()),
+      _selectedDate,
     );
     if (success) {
-      _upiCtrl.clear();
       _reasonCtrl.clear();
       _amountCtrl.clear();
+      setState(() => _selectedDate = DateTime.now());
       Get.snackbar('Success', 'Transaction added!',
           backgroundColor: Colors.green.shade800,
           colorText: Colors.white,
@@ -365,15 +428,35 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                       fontWeight: FontWeight.bold,
                       color: Colors.white)),
               const SizedBox(height: 16),
-              TextFormField(
-                controller: _upiCtrl,
+              // Date picker
+              InkWell(
+                onTap: _pickDate,
+                borderRadius: BorderRadius.circular(8),
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Date',
+                    prefixIcon: Icon(Icons.calendar_today),
+                    border: OutlineInputBorder(),
+                  ),
+                  child: Text(
+                    DateFormat('dd MMM yyyy').format(_selectedDate),
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _paymentMode,
                 decoration: const InputDecoration(
-                  labelText: 'UPI ID',
+                  labelText: 'Payment Mode',
                   prefixIcon: Icon(Icons.payment),
                   border: OutlineInputBorder(),
                 ),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Enter UPI ID' : null,
+                items: const [
+                  DropdownMenuItem(value: 'UPI', child: Text('UPI')),
+                  DropdownMenuItem(value: 'Cash', child: Text('Cash')),
+                ],
+                onChanged: (v) => setState(() => _paymentMode = v!),
               ),
               const SizedBox(height: 12),
               TextFormField(
@@ -420,6 +503,213 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ─── STATEMENT SCREEN ─────────────────────────────────────────────────────────
+class StatementScreen extends StatefulWidget {
+  const StatementScreen({super.key});
+
+  @override
+  State<StatementScreen> createState() => _StatementScreenState();
+}
+
+class _StatementScreenState extends State<StatementScreen> {
+  final ctrl = Get.find<FinanceController>();
+  late String _selectedMonth;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedMonth =
+        ctrl.groupedByMonth.keys.firstOrNull ?? '';
+  }
+
+  List<Transaction> get _currentTxns =>
+      ctrl.groupedByMonth[_selectedMonth] ?? [];
+
+  // Daily debit totals for bar chart
+  Map<int, double> get _dailyTotals {
+    final map = <int, double>{};
+    for (final t in _currentTxns) {
+      if (t.type == 'Debit') {
+        map[t.date.day] = (map[t.date.day] ?? 0) + t.amount;
+      }
+    }
+    return map;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fmt = NumberFormat.currency(locale: 'en_IN', symbol: '₹');
+    final months = ctrl.groupedByMonth.keys.toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Statement'),
+        centerTitle: true,
+      ),
+      body: Obx(() {
+        if (ctrl.transactions.isEmpty) {
+          return const Center(child: Text('No transactions found.'));
+        }
+        return Column(
+          children: [
+            // Month selector
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: DropdownButtonFormField<String>(
+                initialValue: _selectedMonth.isEmpty ? null : _selectedMonth,
+                decoration: const InputDecoration(
+                  labelText: 'Select Month',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.calendar_month),
+                ),
+                items: months
+                    .map((m) => DropdownMenuItem(value: m, child: Text(m)))
+                    .toList(),
+                onChanged: (v) => setState(() => _selectedMonth = v!),
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Bar chart
+            if (_dailyTotals.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Card(
+                  elevation: 0,
+                  color: Colors.white.withValues(alpha: 0.05),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 16, 12, 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Daily Spending',
+                            style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          height: 160,
+                          child: BarChart(
+                            BarChartData(
+                              gridData: const FlGridData(show: false),
+                              borderData: FlBorderData(show: false),
+                              titlesData: FlTitlesData(
+                                leftTitles: const AxisTitles(
+                                    sideTitles: SideTitles(showTitles: false)),
+                                rightTitles: const AxisTitles(
+                                    sideTitles: SideTitles(showTitles: false)),
+                                topTitles: const AxisTitles(
+                                    sideTitles: SideTitles(showTitles: false)),
+                                bottomTitles: AxisTitles(
+                                  sideTitles: SideTitles(
+                                    showTitles: true,
+                                    getTitlesWidget: (v, _) => Text(
+                                      v.toInt().toString(),
+                                      style: const TextStyle(
+                                          color: Colors.white54, fontSize: 10),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              barGroups: _dailyTotals.entries
+                                  .map((e) => BarChartGroupData(
+                                        x: e.key,
+                                        barRods: [
+                                          BarChartRodData(
+                                            toY: e.value,
+                                            color: const Color(0xFF1565C0),
+                                            width: 10,
+                                            borderRadius:
+                                                BorderRadius.circular(4),
+                                          ),
+                                        ],
+                                      ))
+                                  .toList(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 8),
+            // Statement list
+            Expanded(
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                itemCount: _currentTxns.length,
+                separatorBuilder: (context, index) => const Divider(
+                    height: 1, color: Colors.white12),
+                itemBuilder: (_, i) {
+                  final t = _currentTxns[i];
+                  final isDebit = t.type == 'Debit';
+                  return ListTile(
+                    contentPadding:
+                        const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                    leading: Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: isDebit
+                            ? const Color(0xFFC62828).withValues(alpha: 0.15)
+                            : const Color(0xFF1B5E20).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        isDebit ? Icons.arrow_upward : Icons.arrow_downward,
+                        color: isDebit
+                            ? const Color(0xFFEF5350)
+                            : const Color(0xFF66BB6A),
+                        size: 20,
+                      ),
+                    ),
+                    title: Text(
+                      t.reason.isEmpty ? t.mode : t.reason,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500),
+                    ),
+                    subtitle: Text(
+                      '${t.day}  •  ${DateFormat('dd MMM yyyy').format(t.date)}  •  ${t.mode}',
+                      style: const TextStyle(
+                          color: Colors.white54, fontSize: 12),
+                    ),
+                    trailing: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          '${isDebit ? '-' : '+'}${fmt.format(t.amount)}',
+                          style: TextStyle(
+                            color: isDebit
+                                ? const Color(0xFFEF5350)
+                                : const Color(0xFF66BB6A),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        Text(
+                          'Bal: ${fmt.format(t.balance)}',
+                          style: const TextStyle(
+                              color: Colors.white38, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      }),
     );
   }
 }
