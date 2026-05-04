@@ -119,12 +119,13 @@ class FinanceController extends GetxController {
   }
 
   Future<bool> addTransaction(
-      String mode, String reason, double amount, DateTime date) async {
+      String mode, String type, String reason, double amount, DateTime date) async {
     isPosting(true);
     try {
       final url = Uri.parse(kScriptUrl).replace(queryParameters: {
         'action': 'add',
         'mode': mode,
+        'type': type,
         'reason': reason,
         'amount': amount.toString(),
         'date': DateFormat('dd/MM/yyyy').format(date),
@@ -373,6 +374,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   final _reasonCtrl = TextEditingController();
   final _amountCtrl = TextEditingController();
   String _paymentMode = 'UPI';
+  String _txnType = 'Debit';
   DateTime _selectedDate = DateTime.now();
 
   @override
@@ -397,6 +399,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     final ctrl = Get.find<FinanceController>();
     final success = await ctrl.addTransaction(
       _paymentMode,
+      _txnType,
       _reasonCtrl.text.trim(),
       double.parse(_amountCtrl.text.trim()),
       _selectedDate,
@@ -404,7 +407,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     if (success) {
       _reasonCtrl.clear();
       _amountCtrl.clear();
-      setState(() => _selectedDate = DateTime.now());
+      setState(() {
+        _selectedDate = DateTime.now();
+        _txnType = 'Debit';
+      });
       Get.snackbar('Success', 'Transaction added!',
           backgroundColor: Colors.green.shade800,
           colorText: Colors.white,
@@ -466,6 +472,20 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                   DropdownMenuItem(value: 'Cash', child: Text('Cash')),
                 ],
                 onChanged: (v) => setState(() => _paymentMode = v!),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _txnType,
+                decoration: const InputDecoration(
+                  labelText: 'Type',
+                  prefixIcon: Icon(Icons.swap_vert),
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'Debit', child: Text('Debit')),
+                  DropdownMenuItem(value: 'Credit', child: Text('Credit')),
+                ],
+                onChanged: (v) => setState(() => _txnType = v!),
               ),
               const SizedBox(height: 12),
               TextFormField(
