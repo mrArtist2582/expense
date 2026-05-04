@@ -19,12 +19,13 @@
 </head>
 <body>
   <script>
-    // Force service worker to update on every new deployment
+    // Unregister all service workers and clear all caches to force fresh load
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.getRegistrations().then(function(registrations) {
-        for (let reg of registrations) {
-          reg.update();
-        }
+        registrations.forEach(function(reg) { reg.unregister(); });
+      });
+      caches.keys().then(function(keys) {
+        keys.forEach(function(key) { caches.delete(key); });
       });
     }
   </script>
