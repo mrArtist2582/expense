@@ -18,6 +18,16 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <script>
+    // Force service worker to update on every new deployment
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for (let reg of registrations) {
+          reg.update();
+        }
+      });
+    }
+  </script>
   <script src="flutter_bootstrap.js" async>
   </script>
 </body>
