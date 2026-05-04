@@ -33,8 +33,17 @@ class Transaction {
   factory Transaction.fromRow(List row) {
     final upi = double.tryParse(row[3]?.toString() ?? '0') ?? 0;
     final cash = double.tryParse(row[4]?.toString() ?? '0') ?? 0;
+    // Parse date without timezone shift — take date part only
+    DateTime parsedDate;
+    try {
+      final raw = row[1].toString();
+      final d = DateTime.parse(raw);
+      parsedDate = DateTime(d.year, d.month, d.day);
+    } catch (_) {
+      parsedDate = DateTime.now();
+    }
     return Transaction(
-      date: DateTime.tryParse(row[1].toString()) ?? DateTime.now(),
+      date: parsedDate,
       day: row[2]?.toString() ?? '',
       amount: upi > 0 ? upi : cash,
       type: row[6]?.toString() ?? 'Debit',
@@ -594,26 +603,83 @@ class _StatementScreenState extends State<StatementScreen> {
                                 fontWeight: FontWeight.w600)),
                         const SizedBox(height: 12),
                         SizedBox(
-                          height: 160,
+                          height: 220,
                           child: BarChart(
                             BarChartData(
-                              gridData: const FlGridData(show: false),
-                              borderData: FlBorderData(show: false),
+                              alignment: BarChartAlignment.spaceAround,
+                              maxY: (_dailyTotals.values.reduce((a, b) => a > b ? a : b) * 1.3),
+                              gridData: FlGridData(
+                                show: true,
+                                drawVerticalLine: false,
+                                horizontalInterval: _dailyTotals.values.reduce((a, b) => a > b ? a : b) / 4,
+                                getDrawingHorizontalLine: (_) => const FlLine(
+                                  color: Colors.white12,
+                                  strokeWidth: 1,
+                                ),
+                              ),
+                              borderData: FlBorderData(
+                                show: true,
+                                border: const Border(
+                                  bottom: BorderSide(color: Colors.white24),
+                                  left: BorderSide(color: Colors.white24),
+                                ),
+                              ),
                               titlesData: FlTitlesData(
-                                leftTitles: const AxisTitles(
+                                topTitles: const AxisTitles(
                                     sideTitles: SideTitles(showTitles: false)),
                                 rightTitles: const AxisTitles(
                                     sideTitles: SideTitles(showTitles: false)),
-                                topTitles: const AxisTitles(
-                                    sideTitles: SideTitles(showTitles: false)),
-                                bottomTitles: AxisTitles(
+                                leftTitles: AxisTitles(
+                                  axisNameWidget: const Text('₹',
+                                      style: TextStyle(
+                                          color: Colors.white54, fontSize: 11)),
                                   sideTitles: SideTitles(
                                     showTitles: true,
+                                    reservedSize: 48,
                                     getTitlesWidget: (v, _) => Text(
-                                      v.toInt().toString(),
+                                      v >= 1000
+                                          ? '${(v / 1000).toStringAsFixed(1)}k'
+                                          : v.toInt().toString(),
                                       style: const TextStyle(
                                           color: Colors.white54, fontSize: 10),
                                     ),
+                                  ),
+                                ),
+                                bottomTitles: AxisTitles(
+                                  axisNameWidget: const Padding(
+                                    padding: EdgeInsets.only(top: 4),
+                                    child: Text('Date',
+                                        style: TextStyle(
+                                            color: Colors.white54,
+                                            fontSize: 11)),
+                                  ),
+                                  sideTitles: SideTitles(
+                                    showTitles: true,
+                                    reservedSize: 28,
+                                    getTitlesWidget: (v, meta) => SideTitleWidget(
+                                      meta: meta,
+                                      child: Text(
+                                        v.toInt().toString(),
+                                        style: const TextStyle(
+                                            color: Colors.white60,
+                                            fontSize: 10),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              barTouchData: BarTouchData(
+                                enabled: true,
+                                touchTooltipData: BarTouchTooltipData(
+                                  getTooltipColor: (_) => const Color(0xFF1565C0),
+                                  tooltipBorderRadius: BorderRadius.circular(8),
+                                  getTooltipItem: (group, groupIndex, rod, rodIndex) =>
+                                      BarTooltipItem(
+                                    '${group.x} — ₹${rod.toY.toStringAsFixed(0)}',
+                                    const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 12),
                                   ),
                                 ),
                               ),
@@ -623,8 +689,15 @@ class _StatementScreenState extends State<StatementScreen> {
                                         barRods: [
                                           BarChartRodData(
                                             toY: e.value,
-                                            color: const Color(0xFF1565C0),
-                                            width: 10,
+                                            gradient: const LinearGradient(
+                                              colors: [
+                                                Color(0xFF42A5F5),
+                                                Color(0xFF1565C0),
+                                              ],
+                                              begin: Alignment.topCenter,
+                                              end: Alignment.bottomCenter,
+                                            ),
+                                            width: 14,
                                             borderRadius:
                                                 BorderRadius.circular(4),
                                           ),
